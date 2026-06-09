@@ -19,9 +19,7 @@ This repository contains the official implementation for our EDM 2026 paper **"E
 
 We investigate whether privacy-preserving training (using **DP-SGD**) changes not only predictive quality and measured privacy leakage, but also the distribution of prediction errors across student groups.
 
-<p align="center">
-  <img src="figures/overview.png" alt="Study Design" width="800"/>
-</p>
+
 
 ### Key Findings
 
