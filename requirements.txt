@@ -1,0 +1,22 @@
+# Core dependencies for reproducing the paper
+# Python 3.8+ required
+
+# Deep Learning & DP-SGD
+torch>=1.12.0
+opacus>=1.4.0
+
+# Machine Learning
+scikit-learn>=1.0.0
+xgboost>=1.5.0
+
+# Data Processing
+pandas>=1.3.0
+numpy>=1.21.0
+
+# Utilities
+tqdm>=4.62.0
+matplotlib>=3.4.0
+seaborn>=0.11.0
+
+# Optional: for extended analysis
+scipy>=1.7.0

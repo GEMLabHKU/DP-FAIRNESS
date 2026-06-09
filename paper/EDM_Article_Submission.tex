@@ -1,0 +1,622 @@
+
+\documentclass{edm_article}
+% ---- Packages for tables ----
+\usepackage{booktabs}   % enables \toprule \midrule \bottomrule
+\usepackage{graphicx}   % enables \resizebox
+% --- Tables ---
+\usepackage{booktabs}
+\usepackage{threeparttable}
+\usepackage{adjustbox}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{siunitx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{dblfloatfix}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{adjustbox}
+\usepackage{ragged2e}
+% Allow more floats at the top of a page (single- and double-column)
+\setcounter{topnumber}{2}
+\setcounter{dbltopnumber}{2}
+
+% Let floats occupy most of the page top when needed
+\renewcommand{\topfraction}{0.95}
+\renewcommand{\dbltopfraction}{0.95}
+
+% Require only a small amount of text on pages with floats
+\renewcommand{\textfraction}{0.05}
+
+% Allow float-only pages if necessary
+\renewcommand{\floatpagefraction}{0.90}
+\renewcommand{\dblfloatpagefraction}{0.90}
+
+\sisetup{
+  detect-weight=true,
+  detect-family=true,
+  round-mode=places,
+  round-precision=4
+}
+
+% Compact column helpers
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}
+\newcolumntype{R}[1]{>{\raggedleft\arraybackslash}p{#1}}
+
+\begin{document}
+
+
+\title{When Privacy Leads to Wrong Decisions: misclassification in Educational Prediction Systems}
+
+% Submissions for EDM are double-blind: please do not include any author names or affiliations in the submission. 
+% Anonymous authors:
+\numberofauthors{1}
+\author{
+Anonymous\\
+       \affaddr{Anonymous Institution}\\
+       \email{anonymous@anonymous.edu}
+}
+
+\maketitle
+
+\begin{abstract}
+Educational institutions, including K to 12 schools, universities, and online learning platforms, increasingly use predictive models that convert student records into risk scores or labels to guide alerts, outreach, and the allocation of limited academic support. Because these models rely on sensitive student data, institutions often introduce privacy protection to reduce the risk that someone could tell whether an individual student's data was used to build the model.  From an educational perspective, the key concern is not only whether privacy protection reduces this leakage, but also whether it changes which student groups are more likely to receive incorrect decisions, such as false at risk flags or missed cases where support is needed, when demographic information is available. Prior educational data mining work often examines privacy and fairness separately and provides limited evidence on how privacy choices at different stages of the prediction pipeline jointly shape group level decision outcomes. We address this gap with a systematic evaluation across three widely used educational prediction datasets, multiple model families, and two stages of privacy protection. We compare training time differential privacy implemented with DP SGD to release time output controls that restrict or simplify the scores that are shared. We measure privacy risk using membership inference attacks, which test whether an adversary can determine from model outputs whether a student record was part of the training set. We measure predictive usefulness using test set performance and calibration, where calibration indicates whether predicted probabilities behave as meaningful risk levels for guiding action. When demographic attributes are available, we measure fairness using the worst group gap in error rates under a fixed decision rule. Across evaluated settings, DP SGD reduces membership inference performance to near random levels, with attack AUC at or below 0.51, while maintaining strong predictive usefulness. Training time privacy alone does not consistently increase group level error gaps. However, combining DP SGD with output coarsening can increase disparities even when overall accuracy remains high. These results show that privacy protection and equity objectives can be compatible in educational prediction systems, but that layered privacy choices should be treated as a deployment design decision and accompanied by explicit group level monitoring before release.
+\end{abstract}
+
+\keywords{educational prediction systems, privacy protection, misclassification risk, group-level decision errors, educational data mining} % Replace with your own 3-5 keywords
+
+\section{Introduction}
+Educational institutions across K–12, higher education, and online learning contexts increasingly rely on predictive systems to support decisions about student risk and academic support \cite{20hlosta2022_predictive_la_errors}. These systems are used to flag students who may need intervention, prioritise outreach, and allocate limited advising or tutoring resources \cite{3plak2022_ews_dashboard,17susnjak2022_la_dashboard_actionable}. Because these outputs shape who receives attention and support, prediction errors have direct consequences for students \cite{17susnjak2022_la_dashboard_actionable,20hlosta2022_predictive_la_errors}.  For example, a student who is incorrectly flagged as high risk may receive unnecessary intervention, while a student whose risk is missed may not receive support at a critical time. As predictive systems become embedded in routine educational practice, understanding how decision errors arise and whom they affect has become an important concern for educators, administrators, and researchers \cite{23gardner2019_abroca_slicing_fairness,24hutt2019evaluating-fairness-generalizability}.
+
+At the same time, institutions face increasing pressure to protect students' personal data. Educational records often contain sensitive information, and predictive models trained on these records can reveal whether a particular student's data contributed to model development \cite{1shokri2017membership,4Yeom2017PrivacyRI,8niu2024_mia_survey}.
+ In response, institutions increasingly adopt privacy protection mechanisms designed to limit leakage \cite{9abadi2016_dpsgd,12demelius2025recent-advances-dpdl}. In parallel, educational data mining has documented that prediction errors are not always evenly distributed, with some demographic groups experiencing higher rates of incorrect decisions when group attributes are available \cite{21Hu2020TowardsFE,23gardner2019_abroca_slicing_fairness}. Together, this work establishes three central evaluation goals for educational prediction systems, predictive usefulness, privacy protection, and group level disparity. However, these goals are commonly studied in isolation \cite{22gu2022_privacy_accuracy_fairness_fl}.
+
+This separation between privacy-focused and disparity-focused studies leaves several questions unresolved \cite{1shokri2017membership,4Yeom2017PrivacyRI,21Hu2020TowardsFE,23gardner2019_abroca_slicing_fairness}. Existing research often evaluates privacy protection in terms of whether it reduces information leakage, but rarely examines whether the same protection changes group-level error patterns \cite{1shokri2017membership,4Yeom2017PrivacyRI,6Carlini9833649,10jagielski2020_auditing_dpsgd}. Likewise, studies of group-level disparities typically analyze models without privacy protection or treat privacy as a single design choice \cite{21Hu2020TowardsFE,22gu2022_privacy_accuracy_fairness_fl,23gardner2019_abroca_slicing_fairness}. In operational settings, however, educational prediction systems frequently apply privacy at more than one stage, such as during model training and again when predictions are released or simplified for use in practice \cite{9abadi2016_dpsgd,14jia2019_memguard,16chen2024hamp}. Without examining these stages together, it remains unclear how different privacy design choices relate to misclassification risk and whether certain choices are more likely to concentrate decision errors on particular groups of students \cite{18hardt2016eopp,22gu2022_privacy_accuracy_fairness_fl}.
+
+This study addresses these gaps through a systematic empirical analysis of misclassification under privacy protection in educational prediction. We examine how privacy protected models distribute incorrect decisions across student groups, and how different privacy design choices relate to group level misclassification patterns. We focus on decision consequences rather than only aggregate accuracy by analysing errors that matter for support allocation, including false at risk flags and missed cases where support is needed. Our results show that training time privacy protection does not necessarily correspond to larger group level misclassification disparities, whereas layered privacy designs that combine protections at multiple stages can be associated with larger group gaps even when overall accuracy remains high. By linking privacy design choices to patterns of decision error, this study provides guidance for researchers and practitioners seeking to deploy privacy aware prediction systems without unintentionally increasing harm for particular groups of students.
+
+We formulate the following research questions (RQs) to guide this study:
+
+\textbf{RQ1:} To what extent do educational prediction systems produce misclassification under privacy protection?
+
+\textbf{RQ2:} Is misclassification risk distributed unevenly across student groups under privacy protection?
+
+\textbf{RQ3:} Do different privacy design choices lead to different group-level patterns of misclassification?
+
+
+\section{Related Work}
+
+\subsection{Privacy Auditing for Machine Learning Models: Membership Inference as a Measurement Tool}
+
+Membership inference attacks (MIA) provide a practical audit of privacy leakage by asking a concrete question: given a specific record, can an attacker infer from the model's outputs whether that record was used for training \cite{1shokri2017membership,4Yeom2017PrivacyRI}. In a standard audit, the attacker receives a target record, observes or queries the released model interface (e.g., predicted probabilities or risk scores), and makes a binary decision (e.g., member vs non-member) \cite{1shokri2017membership,2pollock2025free}. This framing fits educational prediction systems because institutions often expose model outputs through dashboards or related tools \cite{3plak2022_ews_dashboard}. The privacy risk therefore concerns what can be inferred from released outputs, not only what can be inferred from raw student data.
+
+A key methodological point is that MIA results depend strongly on the attacker's access assumptions, which should match the deployed interface \cite{1shokri2017membership,5Salem2018MLLeaksMA}. Attacks are typically stronger when the interface exposes richer outputs \cite{1shokri2017membership}, for example, releasing the full confidence scores rather than only the final class label, or allowing an attacker to query the system multiple times. Prior work also cautions that a single summary number can hide the high-confidence privacy regime that matters in practice \cite{6Carlini9833649,33Aerni10.1145/3658644.3690194}. Accordingly, recent evaluations recommend reporting metrics that focus on stringent operating points, such as membership advantage under a stringent false-positive constraint \cite{2pollock2025free,4Yeom2017PrivacyRI,6Carlini9833649}. Following this guidance, we state access assumptions explicitly, align them with the intended release interface when possible, and report membership inference performance using both standard and low false positive focused measures.
+
+\subsection{Privacy Defenses: DP-SGD vs Release-time Output Controls}
+
+Two common interventions in the prediction pipeline are training-time differential privacy and release-time output controls \cite{7he2025labelonly,8niu2024_mia_survey,9abadi2016_dpsgd}. For training-time protection, Differentially Private Stochastic Gradient Descent (DP-SGD) is a widely used mechanism \cite{9abadi2016_dpsgd,10jagielski2020_auditing_dpsgd}. DP-SGD limits how much any single training example can influence an update (via gradient clipping) and adds calibrated noise during training \cite{9abadi2016_dpsgd}, so that including or removing one person's record changes the learned model only slightly \cite{11sander2023tan}. This design directly targets membership leakage, but it often introduces a utility cost, reducing predictive accuracy and potentially affecting calibration \cite{12demelius2025recent-advances-dpdl}.
+
+Release time output controls instead reduce leakage by reducing the information content of what is exposed. Examples include returning only a top prediction, rounding scores, or mapping a continuous score into a small number of risk bins \cite{1shokri2017membership,14jia2019_memguard,15hu2023_mia_defenses_survey}. This approach is operationally attractive in education because many systems already present actionable scores through dashboards rather than exposing full probability vectors \cite{3plak2022_ews_dashboard}. Prior work finds that reducing score confidence or granularity can reduce membership inference in some settings while preserving predictive usefulness \cite{1shokri2017membership,14jia2019_memguard,15hu2023_mia_defenses_survey,16chen2024hamp}. However, these controls also change what decision makers see, so they can affect how cutoffs are set and applied in practice \cite{3plak2022_ews_dashboard,17susnjak2022_la_dashboard_actionable}. This motivates evaluating output controls as part of deployment design, not only as a technical privacy modification.
+
+\subsection{Fairness in Educational Predictive Modeling: Subgroup Disparities and Reporting Practice}
+
+In early warning systems, fairness becomes deployment relevant when prediction errors translate into different decision consequences across student groups. One group may be more likely to be flagged for support without needing it, while another group may be more likely to be overlooked when support is needed \cite{18hardt2016eopp,19kleinberg2016risktradeoffs,20hlosta2022_predictive_la_errors,21Hu2020TowardsFE,22gu2022_privacy_accuracy_fairness_fl}. Educational prediction studies, including at risk prediction, have repeatedly shown that aggregate metrics can conceal such differences \cite{20hlosta2022_predictive_la_errors,21Hu2020TowardsFE,22gu2022_privacy_accuracy_fairness_fl,23gardner2019_abroca_slicing_fairness,24hutt2019evaluating-fairness-generalizability}. A common reporting practice is slicing based evaluation, which reports subgroup specific error rates under a fixed decision rule and makes group gaps visible \cite{23gardner2019_abroca_slicing_fairness,25Chung2020SliceFinder}.
+
+Related work also emphasises that demographic attributes require careful handling. Simply removing demographic features does not guarantee improved fairness \cite{26barocas2016big-data-disparate-impact-ssrn,27dwork2012fairness-through-awareness}, and the choice to include or exclude them depends on the intervention workflow and the decision policy that consumes model outputs \cite{27dwork2012fairness-through-awareness,29baker2023demographic}. From an educational data mining perspective, these observations motivate reporting practices that include: (i) subgroup-specific error rates under a fixed decision rule, (ii) clear documentation of whether and how demographic attributes are used, and (iii) an interpretation of what different errors mean in the intervention process (who receives support and who is missed). In line with this practice, we focus on worst-group error gaps under a fixed decision rule as a deployment-relevant fairness lens.
+
+\subsection{Joint View: Privacy--Utility--Fairness Trade-offs in Educational Prediction Pipelines}
+
+A growing body of work shows that privacy protection and fairness do not necessarily move in the same direction \cite{12demelius2025recent-advances-dpdl,15hu2023_mia_defenses_survey,22gu2022_privacy_accuracy_fairness_fl}. In some settings (e.g., release-time defenses against membership inference), privacy mechanisms reduce leakage with little change in subgroup gaps \cite{14jia2019_memguard,16chen2024hamp}, while in others they introduce uneven utility loss that can widen disparities, especially when underrepresented groups experience larger performance degradation \cite{18hardt2016eopp,19kleinberg2016risktradeoffs,22gu2022_privacy_accuracy_fairness_fl}. These effects depend on data composition, learning procedures, and the decision policy applied to model outputs \cite{9abadi2016_dpsgd,18hardt2016eopp,19kleinberg2016risktradeoffs,22gu2022_privacy_accuracy_fairness_fl}. As a result, privacy mechanisms should be treated as design choices that require evaluating fairness, not just additions made for compliance  \cite{10jagielski2020_auditing_dpsgd,22gu2022_privacy_accuracy_fairness_fl,28corbett-davies2023measure-mismeasure-fairness}.
+
+
+This joint view is especially relevant in educational systems, where institutions often combine multiple privacy choices across the pipeline, such as privacy-preserving training and release-time interface limits \cite{3plak2022_ews_dashboard,9abadi2016_dpsgd,14jia2019_memguard}. Because these choices can interact, pipeline-level evaluation that reports privacy (membership leakage under a stated threat model), utility (test performance and calibration), and fairness (worst-group error gaps under a fixed decision rule) provides a more deployment-faithful picture than reporting any single outcome alone \cite{1shokri2017membership,18hardt2016eopp,23gardner2019_abroca_slicing_fairness}. However, prior work in education provides limited empirical evidence on whether using DP only during training, versus combining DP with output controls at the time of release, leads to systematically different misclassification outcomes across student groups under the same decision rule \cite{12demelius2025recent-advances-dpdl,21Hu2020TowardsFE,23gardner2019_abroca_slicing_fairness}. Building on this line of work, our study evaluates the full pipeline by jointly reporting these three outcomes and examining whether layered privacy choices reduce leakage while preserving or worsening subgroup disparities.
+
+
+
+
+\section{Method}
+
+This section explains how we produce evidence that can be compared across privacy conditions. We use three educational datasets to represent different learning settings, standard prediction models as measurement tools, and privacy protections applied either during training or when predictions are released for use. We then define a single evaluation procedure that measures privacy risk, predictive usefulness, and group-level decision errors under the same decision rule. This design makes differences across conditions attributable to the privacy choices rather than to inconsistent thresholds or output definitions.
+
+\subsection{Dataset}
+
+Open University Learning Analytics Dataset (OULAD) \cite{30oro53873}: We include OULAD because it is the dataset in our study that supports group-level analysis of decision errors. OULAD combines course outcomes with student background information and learning activity from a virtual learning environment. In our experiments, we use demographic attributes available in OULAD to define student groups for error-gap reporting, and we use course participation, assessment records, and online activity measures as prediction inputs. This dataset therefore anchors our fairness results by allowing us to test whether privacy protection is associated with uneven error rates across groups of students, rather than only with changes in overall performance.
+
+UCI ``Predict Students' Dropout and Academic Success'' dataset (UCI697) \cite{31predict_students_dropout_academic_success_uci697}: We include the UCI697 dataset to broaden the empirical basis for our privacy and utility findings beyond a single institutional dataset. UCI697 is a structured higher-education dataset focused on variables available at enrollment and during early academic progress, together with later academic outcomes. In this study, its role is to provide a second educational prediction setting for evaluating privacy risk and predictive usefulness under the same defense choices. We do not report group-level fairness gaps for this dataset in our main analyses, because our fairness evaluation is restricted to the dataset in which demographic group labels are explicitly used for subgroup error reporting.
+
+HarvardX–MITx Person–Course dataset (HarvardX Person–\\Course) \cite{32DVN_26147_2014}: We include the HarvardX Person–Course data-\\set to represent large-scale online learning in MOOCs, where engagement patterns and participation structures differ from course-based institutional records. This dataset provides de-identified course participation measures and course outcome indicators at the person–course level, which enables a third evaluation setting for privacy and utility. In our experiments, HarvardX allows us to check whether privacy-risk and usefulness patterns hold in a large-scale online learning setting that differs in scale and learning modality. As with UCI697, we do not conduct group-level fairness evaluation on this dataset in our main results because the fairness analyses in this paper require demographic group labels that are used consistently for subgroup error reporting.
+
+Data processing and study use. For each dataset, we define a binary prediction task tied to an educational decision setting in which model outputs may be used to trigger alerts, outreach, or support allocation. Task definitions, label mappings, and prediction windows are fixed as specified in Table~2. We apply consistent pre-processing across datasets to support comparable evaluation, including encoding categorical variables for model input and standardizing continuous variables when required by the learning algorithm. We also apply dataset-appropriate train/test splitting rules, and when a student identifier is available we ensure that records from the same student do not appear in both training and evaluation. Group-level error gaps are computed only in the dataset where demographic attributes are used for subgroup reporting, while privacy risk is evaluated using a consistent membership inference protocol across all datasets to enable cross-dataset comparisons. 
+
+
+\subsection{Prediction Models and Learning Setup}
+
+This study does not introduce a new prediction model. The contribution is empirical evidence about how privacy protection relates to privacy risk, predictive usefulness, and group-level decision errors in educational prediction tasks. We therefore use commonly adopted model types as measurement tools, so that observed differences across conditions can be attributed to the privacy choices rather than to idiosyncratic modeling decisions.
+
+We evaluate a linear baseline (logistic regression), a tree-ensemble baseline (XGBoost), and two neural network variants (MLP-small and MLP-large) that differ in capacity. These model types are widely used for tabular educational prediction tasks and represent distinct modeling assumptions about how input features combine to produce risk scores. Table~\ref{tab:model-inventory} summarizes the model types, capacity cues, which models are trained with DP-SGD, and the form of output used for downstream evaluation.
+
+To make comparisons interpretable, we keep the prediction problem fixed within each dataset. For a given dataset, all models are trained on the same task definition and the same feature inputs described in the Dataset subsection. When student identifiers are available, we split data so that records from the same student do not appear in both training and evaluation. Each model produces a probability-like risk score. We convert that score into a binary decision using a fixed threshold when computing decision-error measures (defined in Section~3.4), so that group-level error comparisons reflect differences in model outputs rather than differences in threshold selection.
+
+Model training follows standard supervised learning practice for binary classification. Logistic regression is fit to minimize cross-entropy loss on the training split, using regularization as provided by the library default for numerical stability. XGBoost is trained as a gradient-boosted tree ensemble using the same training split and objective, with ensemble capacity controlled by the configured number of trees and tree depth. For neural models, MLP-small uses two hidden layers with a 64-unit width and MLP-large uses three hidden layers with a 256-unit width, and both are trained to minimize cross-entropy loss on the training split. When model selection requires a validation set (for example, to select the training checkpoint), we apply the same validation logic across conditions within a dataset.
+
+When comparing private and non-private neural models, we keep the network architecture fixed and treat the presence of DP-SGD during optimization as the defining difference between conditions, as specified in Section~3.3. The private and non-private versions of each MLP use the same network architecture and the same training schedule; the only difference is whether DP-SGD is applied during optimization, as specified in Section~3.3. To reduce dependence on a single initialization or split realization, we repeat core settings across multiple random seeds and report summary estimates over these repeats in the Results section.
+
+Finally, we distinguish the model's direct risk score from what is released for use when a release-time protection is applied. In the default setting, the model produces a continuous probability-like score. Under release-time protections, the released output may be coarsened or perturbed. Section~3.4 specifies which stored output is used for each metric so that evaluation matches what is released in each condition.
+
+% Requires: \usepackage{booktabs}
+\begin{table}[t]
+\centering
+\caption{Model inventory used for evaluation. All models produce a probability-like risk score; release-time protections may coarsen or perturb this output.}
+\label{tab:model-inventory}
+{\footnotesize
+\setlength{\tabcolsep}{3pt}
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{@{}llp{3.5cm}<\raggedright p{2.8cm}<\raggedright p{2.8cm}<\raggedright p{3.4cm}<\raggedright @{}}
+\toprule
+Model type & Variant & Capacity cue & Training-time privacy & Output used & Notes \\
+\midrule
+Logistic Regression (LR) & --- &
+Linear model; trainable parameters depend on the encoded input dimension$^{\dagger}$ &
+Not applicable &
+Risk score (probability) &
+Standard linear baseline for tabular prediction. \\
+
+Gradient-Boosted Trees (XGBoost) & --- &
+Ensemble model; capacity set by number of trees and tree depth (see config)$^{\ddagger}$ &
+Not applicable &
+Risk score (probability) &
+Tree-based model commonly used in EDM tabular settings. \\
+
+Multi-layer Perceptron (MLP) & small &
+2-layer network, hidden=64; $\sim$0.8K--1.5K trainable parameters$^{\dagger}$ &
+DP-SGD (evaluated) &
+Risk score (probability) &
+Lower-capacity neural baseline; used to test sensitivity to capacity. \\
+
+Multi-layer Perceptron (MLP) & large &
+3-layer network, hidden=256; $\sim$69K--72K trainable parameters$^{\dagger}$ &
+DP-SGD (evaluated) &
+Risk score (probability) &
+Higher-capacity neural model for capacity-robustness checks. \\
+\bottomrule
+\end{tabular}%
+}}
+\end{table}
+
+
+
+\vspace{0.3em}
+{\footnotesize
+$^{\dagger}$Trainable parameter counts are computed from the model architecture and the post-encoding input dimension (categorical variables are encoded before model fitting). Reported ranges reflect differences in input dimension across datasets. \\
+$^{\ddagger}$For tree ensembles, ``number of parameters'' is not directly comparable to neural/linear models; we report capacity through ensemble size and depth as specified in the experiment configuration.
+}
+
+\subsection{Privacy Protection and Threat Model}
+
+We evaluate privacy protection as limits on what can be inferred about an individual student from the use of a trained prediction model. The privacy risk we study is membership inference: an adversary attempts to determine whether a specific student record was included in the training data. In educational settings, revealing this membership signal can expose student participation in sensitive learning records or support-allocation processes, even when names and identifiers are removed. In our experiments, we therefore compare protections applied at two points that matter for practice: how the model is trained and what information is released when predictions are used.
+
+For neural models, we evaluate training-time privacy using a simplified DP-SGD procedure that adds noise during gradient-based optimization. Consistent with this simplified implementation, gradient clipping is not used; the run metadata records this setting as \texttt{dp$\backslash$clip$\backslash$norm = null}. We index training-time privacy strength using $\varepsilon \in \{1,5,10\}$ as the configured comparison levels. For transparency, we record a run-specific $\delta$ value as $\delta = 1/n_{\text{train}}$, where $n_{\text{train}}$ is the training split size for that run. Because $n_{\text{train}}$ varies by dataset and by seed, the resulting $\delta$ is recorded per run in the stored metadata. We report $\varepsilon$ and $\delta$ as the recorded training settings for each run (tagged in metadata as \texttt{dp$\backslash$accountant$\backslash$type = simplified$\backslash$dp$\backslash$sgd}), and we assess privacy risk empirically through membership inference performance under the threat models defined below. Training-time DP-SGD is evaluated only for MLP models in this study.
+
+
+Separately, we evaluate release-time protections that modify what is released from a trained model without retraining. These protections operate on the decision score used throughout the paper: the positive-class probability $p(y{=}1)\in[0,1]$ (the second column of the predicted probability vector). Output coarsening reduces output granularity. We implement coarsening as (i) \emph{label-only release}, where only a binary 0/1 label is released, and (ii) \emph{rounded-score release}, where the probability score is rounded to a fixed step size. Output perturbation adds random noise to the released probability score. We evaluate Gaussian noise and Laplace noise with scale $0.1$ applied to $p(y{=}1)$ and clipped to $[0,1]$. Table~\ref{tab:privacy-conditions} summarizes all training-time and release-time protection conditions and their parameters.
+
+\begin{table*}[t]
+\centering
+\caption{Privacy protection conditions evaluated in this study. Training-time protection modifies learning for neural models; release-time protection modifies what is released for use from a trained model. All release-time protections operate on the positive-class probability $p(y{=}1)\in[0,1]$.}
+\label{tab:privacy-conditions}
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}llll@{}}
+\toprule
+Condition & When applied & What is released & Parameters \\
+\midrule
+none & --- & full risk score $p(y{=}1)$ & --- \\
+DP-SGD & during training & full risk score $p(y{=}1)$ & $\varepsilon \in \{1,5,10\}$; $\delta = 1/n_{\text{train}}$ \\
+\midrule
+output\_coarsening (label-only) & at release & binary label (0/1) & step=0.05 \\
+output\_coarsening (rounding) & at release & rounded risk score & step=0.10 \\
+output\_perturbation (Gaussian) & at release & perturbed risk score & $\mathcal{N}(0,0.1^2)$, clipped to $[0,1]$ \\
+output\_perturbation (Laplace) & at release & perturbed risk score & $\mathrm{Lap}(0,0.1)$, clipped to $[0,1]$ \\
+\midrule
+DP-SGD + release-time protection & training + release & coarsened/perturbed output & DP-SGD as above + release parameters above \\
+\bottomrule
+\end{tabular}%
+}
+\end{table*}
+
+
+
+Membership inference evaluation depends on what information the adversary can observe. Our default assumption is \emph{same-as-release}: the adversary observes exactly the information that is released for use. This mapping applies to the baseline condition and to output perturbation, because perturbation directly modifies the released score. For output coarsening, we additionally evaluate a \emph{stronger-than-release} control condition. In this control, the released output may be label-only or rounded, but the adversary is allowed to observe full probability scores. This control checks whether low attack success is due to the limited information released to users or due to the attack procedure itself. Table~\ref{tab:threat-model} summarizes the mapping used in our evaluation.
+
+\begin{table*}[t]
+\centering
+\caption{Threat model mapping between released output and attacker-visible input for membership inference evaluation. Same-as-release is used by default; a stronger-than-release control is used only for output coarsening.}
+\label{tab:threat-model}
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Release defense & Released output & Attacker observes \\
+\midrule
+none & full risk score or label-only & same-as-release \\
+output\_perturbation & perturbed risk score or label-only & same-as-release \\
+output\_coarsening & coarsened output (including label-only) & stronger-than-release control (attacker sees full risk scores) \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+
+We quantify privacy risk using membership inference performance summaries. The primary statistic is attack AUC, which measures how well an adversary can distinguish training members from non-members given the attacker-visible output under the specified threat model. We also report attack advantage over random guessing and true positive rate at a low false positive rate, which emphasize low-false-alarm regimes that are relevant when false accusations of membership are costly. Together, these measures indicate whether the released outputs make training membership predictable beyond chance.
+
+The protection conditions in Table~\ref{tab:privacy-conditions} define the privacy interventions compared in our experiments, and Table~\ref{tab:threat-model} defines what the adversary can observe when mounting membership inference. In the next section, we define a single evaluation procedure that computes privacy risk, predictive usefulness, and group-level decision errors consistently across conditions, including the rule for whether utility is computed from base predictions or released predictions depending on the presence of a release-time protection.
+
+\subsection{Evaluation Criteria and Experimental Design}
+
+This subsection defines a single evaluation procedure that produces comparable results across the privacy conditions defined above. Specifically, it specifies how we compute privacy risk, predictive usefulness, and (when demographic labels are available) group-level decision errors under the same decision rule. These choices ensure that differences across conditions reflect the privacy protections themselves rather than threshold tuning, inconsistent output definitions, or undefined group rates caused by sparse denominators.
+
+All evaluation is computed from run artifacts. Each run stores two versions of the model output on the test split: \texttt{predictions\_base.npy} (the model's direct output before any release-time modification) and \texttt{predictions\_released} \texttt{.npy} (the output after coarsening or perturbation, when applicable). The decision score used throughout the study is the positive-class probability
+\begin{equation}
+s_i = \hat{p}(y{=}1 \mid x_i)\in[0,1]
+\end{equation}
+taken as the second column of the predicted probability vector. Here, $y{=}1$ denotes the target outcome defined in Table~2 for each dataset (e.g., course failure, low performance, or non-completion depending on the dataset). This definition matters because release-time protections operate on the released score and membership inference attacks use whatever score is exposed under the threat model in Section~3.3.
+
+To keep usefulness and error-based evaluation aligned with what would be available for use, we compute utility and decision-error metrics on different outputs depending on whether a release-time protection is applied. If no release-time protection is used, we evaluate the base risk scores. If coarsening or perturbation is applied at release, we evaluate the released outputs. Table~\ref{tab:eval-output-mapping} summarizes this mapping. This rule prevents evaluating a release-time defense using an internal score that is not released in that condition.
+
+\begin{table*}[t]
+\centering
+\caption{Output mapping used for utility and decision-error evaluation. The mapping ensures that evaluation reflects the information available at the point of use.}
+\label{tab:eval-output-mapping}
+\setlength{\tabcolsep}{6pt}
+\begin{tabularx}{\textwidth}{@{}X X X@{}}
+\toprule
+Release-time protection & Utility / decision-error inputs & Artifact file \\
+\midrule
+none & base risk scores $s_i$ & \texttt{predictions\_base.npy} \\
+output\_coarsening & released outputs & \texttt{predictions\_released.npy} \\
+output\_perturbation & released outputs & \texttt{predictions\_released.npy} \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+
+
+
+Because educational interventions are often triggered by a fixed rule, we convert risk scores into binary decisions using a fixed threshold $\tau = 0.5$:
+\begin{equation}
+\hat{y}_i = \mathbb{I}[s_i \ge 0.5]
+\end{equation}
+We use a fixed threshold to keep comparisons interpretable and to avoid masking the effects of privacy protection through post-hoc threshold selection. Under this rule, a false alarm occurs when $\hat{y}_i{=}1$ but $y_i{=}0$, and a missed-risk case occurs when $\hat{y}_i{=}0$ but $y_i{=}1$ (where the meaning of $y{=}1$ follows Table~2). We assess predictive usefulness in three complementary ways. Test AUC measures whether higher-outcome-risk students tend to receive higher scores (discrimination). Test F1 measures decision quality after thresholding by balancing false alarms and missed-risk cases. Expected calibration error (ECE) measures whether a score can be interpreted as a meaningful risk level for action. We compute ECE using 10 bins over the probability interval $[0,1]$:
+\begin{equation}
+\mathrm{ECE} = \sum_{b=1}^{B} \frac{|I_b|}{n}\left|\mathrm{acc}(I_b) - \mathrm{conf}(I_b)\right|,\quad B=10
+\end{equation}
+where $I_b$ is the set of test instances with $s_i$ in bin $b$, $\mathrm{acc}(I_b)$ is the empirical outcome rate in that bin, and $\mathrm{conf}(I_b)$ is the average predicted probability in that bin.
+
+When demographic group labels are available (OULAD), we evaluate group-level decision errors under the same fixed threshold. For each group $g$, we compute:
+\begin{align}
+\mathrm{TPR}_g &= \frac{\mathrm{TP}_g}{\mathrm{TP}_g + \mathrm{FN}_g} \\
+\mathrm{FPR}_g &= \frac{\mathrm{FP}_g}{\mathrm{FP}_g + \mathrm{TN}_g} \\
+\mathrm{FNR}_g &= \frac{\mathrm{FN}_g}{\mathrm{FN}_g + \mathrm{TP}_g}
+\end{align}
+
+We summarize between-group disparity using worst-group gaps defined as the range across groups, for example:
+\begin{equation}
+\Delta\mathrm{TPR} = \max_g \mathrm{TPR}_g - \min_g \mathrm{TPR}_g
+\end{equation}
+and analogously for $\Delta\mathrm{FPR}$ and $\Delta\mathrm{FNR}$. To avoid interpreting undefined rates as meaningful disparities, we apply a validity rule as implemented in our evaluation code: if a group's denominator for a rate is below 5 (fewer than 5 positives for TPR/FNR or fewer than 5 negatives for FPR), that group rate is treated as not available for that run and the run records group coverage.
+
+Privacy risk is quantified using membership inference performance under the threat models in Section~3.3. We report attack AUC as the primary summary, and we also report attack advantage and $\mathrm{TPR}@\mathrm{FPR}=0.05$ to reflect low-false-alarm regimes where incorrect membership claims are costly. These privacy metrics are computed on the attacker-visible outputs defined by the visibility mapping in Section~3.3, so that privacy evaluation matches what is released in each condition.
+
+Each core setting is repeated across five random seeds. For each setting, we summarize results by taking the mean over runs and reporting uncertainty using bootstrap confidence intervals with 200 resamples over the set of run-level metric values (one value per seed). These intervals reflect variability across runs rather than resampling variability within the test set. Together, the rules in this subsection define the study's main output: comparable estimates of privacy risk, predictive usefulness, and (when available) group-level decision-error gaps for each privacy condition in Section~3.3 under a shared decision rule.
+
+\section{Results}
+
+\subsection{RQ1: Misclassification Under Privacy Protection}
+\label{subsec:rq1}
+
+We operationalize misclassification as decision errors produced by a fixed decision rule applied to the output that is released for use. Throughout this section, we treat the F1 score under the fixed threshold $\tau=0.5$ as the main summary of misclassification, because it reflects the balance between false alarms and missed-risk decisions under a shared rule. We report test AUC and expected calibration error (ECE) alongside F1 to separate two related questions that matter for educational use: whether the released outputs order students by risk (AUC) and whether released probabilities match observed outcome rates (ECE). For each privacy condition, we compute F1, AUC, and ECE on the same output that would be available at the point of use: base scores when no release-time protection is applied, and released outputs when coarsening or perturbation is applied (Section~3.4). Table~\ref{tab:rq1_main} summarizes baseline and training-time privacy comparisons across datasets, and Table~\ref{tab:rq1_release_oulad} focuses on how release-time design choices change decision outcomes on OULAD. For readability, we report mean values in the text; the corresponding 95\% bootstrap confidence intervals are reported alongside the full tables (Table~6 in \texttt{all\_tables.md}).
+
+Table~\ref{tab:rq1_main} shows that baseline misclassification differs across learning settings even before privacy protection is applied. We therefore treat each dataset as its own decision setting and compare conditions within that setting. In Table~\ref{tab:rq1_main}, the key comparison is between the baseline row and the DP-SGD row for the same dataset and model.
+
+When we move from non-private training to DP-SGD training at $\varepsilon=5$, the direction and size of the F1 change differs across datasets (Table~\ref{tab:rq1_main}). For instance, in OULAD with MLP-small, F1 increases from $0.549$ to $0.561$ under the same threshold rule, while AUC remains essentially unchanged. In this section, we read patterns like this as follows: F1 is the direct summary of misclassification under the fixed decision rule, and AUC and ECE help clarify whether that misclassification change accompanies a change in ranking ability or in probability calibration. The remaining rows in Table~\ref{tab:rq1_main} show that other datasets can exhibit different combinations of AUC, F1, and ECE changes under the same privacy setting, so conclusions about misclassification under privacy protection should be stated with the dataset context in view.
+
+Release-time privacy design can change misclassification because it changes what the decision rule receives, even when the trained model is the same. Table~\ref{tab:rq1_release_oulad} makes this point by holding the dataset and model family fixed (OULAD, MLP-small) and changing only the release-time output rule. Under output perturbation, the threshold is applied to probabilities after noise is added and the result is clipped to the $[0,1]$ range. Under label-only coarsening, the released output is a binary label rather than a graded score. In that condition, the reported F1 is the performance of the fixed rule applied to that released label, so it should be read as decision accuracy for a binary output rather than as evidence of improved risk scoring. Label-only coarsening yields AUC $=0.500$ because the released output does not provide a continuous ranking signal, and its ECE reflects calibration computed from a two-point output (0 or 1), which does not support the same interpretation of risk levels as calibration of graded probabilities. The point of this comparison is that changing the released output changes which inputs the fixed rule receives (a probability score versus a 0/1 label), so the same rule can yield different error rates even when training is unchanged.
+
+To read the results consistently, it helps to keep ranking and thresholded decisions distinct. AUC summarizes whether higher-risk students tend to receive higher released scores, while F1 summarizes decision outcomes at the single operating point $\tau=0.5$. ECE provides a second check on released probabilities by comparing, within each of 10 probability bins, the average predicted probability to the observed outcome rate (computed as specified in Section~3.4). Reporting these summaries together helps separate changes in ranking (AUC), thresholded decisions (F1), and probability--outcome alignment (ECE), so readers do not treat them as the same kind of change.
+
+This section reports misclassification under a fixed decision rule (F1) together with two supporting summaries (AUC and ECE), computed on the output that is released in each privacy condition. In the next sections, we use the same released outputs and the same threshold rule to evaluate whether decision errors are distributed unevenly across student groups (RQ2) and whether different privacy design choices change these group-level patterns (RQ3).
+
+\begin{table}[t]
+\centering
+\caption{RQ1-A: Misclassification summaries under baseline training and training-time privacy (DP-SGD at $\varepsilon=5$). Values are the mean over five seeds, rounded to three decimals. The corresponding 95\% bootstrap confidence intervals (200 resamples over seed-level metric values) are reported in Table~6 of \texttt{all\_tables.md}.}
+\label{tab:rq1_main}
+\begin{adjustbox}{max width=\linewidth}
+\begin{tabular}{@{}lllccc@{}}
+\toprule
+Dataset & Model & Condition & Test AUC & Test F1 & ECE \\
+\midrule
+OULAD & MLP-small & none & 0.589 & 0.549 & 0.104 \\
+OULAD & MLP-small & DP-SGD ($\varepsilon=5$) & 0.589 & 0.561 & 0.084 \\
+\midrule
+UCI697 & MLP-large & none & 0.971 & 0.891 & 0.320 \\
+UCI697 & MLP-large & DP-SGD ($\varepsilon=5$) & 0.500 & 0.502 & 0.243 \\
+\midrule
+HarvardX Person--Course & MLP-large & none & 0.991 & 0.930 & 0.187 \\
+HarvardX Person--Course & MLP-large & DP-SGD ($\varepsilon=5$) & 0.994 & 0.727 & 0.039 \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{RQ1-B: OULAD sensitivity to release-time privacy design (MLP-small). All rows use the fixed decision rule with $\tau=0.5$ and evaluate the output that is released in that condition (Section~3.4). Values are the mean over five seeds, rounded to three decimals; 95\% bootstrap confidence intervals are reported in Table~6 of \texttt{all\_tables.md}.}
+\label{tab:rq1_release_oulad}
+\begin{adjustbox}{max width=\linewidth}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Released output condition (OULAD, MLP-small) & Test AUC & Test F1 & ECE \\
+\midrule
+none (full risk score) & 0.589 & 0.549 & 0.104 \\
+DP-SGD ($\varepsilon=5$, full risk score) & 0.589 & 0.561 & 0.084 \\
+output\_perturbation (scale=0.1) & 0.561 & 0.571 & 0.186 \\
+output\_coarsening (label-only) & 0.500 & 0.691 & 0.472 \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\end{table}
+
+
+\subsection{RQ2: Group-Level Unevenness in Misclassification}
+
+RQ2 asks whether misclassification under privacy protection is distributed unevenly across student groups. We answer RQ2 using OULAD because it is the only dataset in this study that provides demographic attributes that can be used consistently to define subgroups for reporting. Throughout this section, “unevenness” refers to differences in error rates across the defined groups under the same decision rule. Following Section~3.4, we summarize these differences using worst-group gaps in true-positive rate ($\Delta\mathrm{TPR}$), false-positive rate ($\Delta\mathrm{FPR}$), and false-negative rate ($\Delta\mathrm{FNR}$), and we report group ECE to describe whether the same reported probability corresponds to similar observed outcome rates across groups.
+
+Table~\ref{tab:rq2_group_gaps_gender} shows that gender-based gaps on OULAD are generally small in absolute magnitude across the conditions included in the main results table. The MLP-small baseline exhibits gaps below one percentage point in $\Delta\mathrm{TPR}$, with $\Delta\mathrm{FPR}$ and $\Delta\mathrm{FNR}$ of comparable scale. When training-time privacy is introduced for the neural models (DP-SGD at $\varepsilon=5$), the gaps remain in the same range rather than shifting in a consistent upward direction. Under the fixed decision rule used in this paper, adding training-time privacy does not coincide with a systematic redistribution of decision errors toward one gender group.
+
+Changes applied at the point of release can still matter for group outcomes because they change the form of the information used to make decisions. In Table~\ref{tab:rq2_group_gaps_gender}, output perturbation is accompanied by larger group ECE in several rows, which indicates that the released probabilities become less well aligned with group-specific outcome rates. That calibration change does not translate into a single, uniform pattern for the error-rate gaps. Some settings show modestly larger gaps, while others remain close to the corresponding non-perturbed condition. This is why RQ2 is framed around group-level error rates rather than around a single overall performance number: the group-level distribution of false alarms and missed-risk cases must be checked directly under the decision rule that triggers action.
+
+Table~\ref{tab:rq2_overall_vs_group} places overall misclassification and group-level unevenness side by side for matched OULAD rows. The comparison illustrates that overall discrimination or thresholded decision quality can move without implying an equivalent change in group-level gaps. For example, Table~\ref{tab:rq2_overall_vs_group} shows paired rows where a release-time perturbation changes test AUC and test F1, while the corresponding $\Delta\mathrm{TPR}$ changes as well under the same dataset and threshold. The joint view makes the contribution of this subsection concrete: it evaluates whether privacy protection changes which students are more likely to be harmed by incorrect decisions under the same decision rule, not only whether the model performs well on average.
+
+% RQ2-A: Group-level misclassification unevenness (OULAD, gender; from Table 8)
+\begin{table}[t]
+\centering
+\caption{Group-level misclassification gaps on OULAD (gender). All gaps and group ECE are reported in percentage points (pp), i.e., $100\times$ the values in Table~8.}
+\label{tab:rq2_group_gaps_gender}
+\begin{threeparttable}
+\begin{adjustbox}{max width=\linewidth}
+\begin{tabular}{@{}l l l l l@{}}
+\toprule
+Condition & $\Delta\mathrm{TPR}$ (pp) & $\Delta\mathrm{FPR}$ (pp) & $\Delta\mathrm{FNR}$ (pp) & Group ECE (pp) \\
+\midrule
+None (LR) &
+0.85 [0.56, 1.20] &
+0.81 [0.30, 1.60] &
+0.85 [0.58, 1.17] &
+0.06 [0.02, 0.11] \\
+None + output\_perturbation (LR) &
+1.02 [0.68, 1.31] &
+1.38 [0.83, 2.10] &
+1.02 [0.72, 1.36] &
+0.14 [0.10, 0.19] \\
+None (MLP-small) &
+0.64 [0.34, 0.87] &
+0.85 [0.26, 1.83] &
+0.64 [0.35, 0.87] &
+0.06 [0.02, 0.10] \\
+DP-SGD ($\varepsilon=5$) (MLP-small) &
+0.53 [0.18, 0.92] &
+1.15 [0.39, 2.19] &
+0.53 [0.20, 0.87] &
+0.06 [0.02, 0.09] \\
+None + output\_perturbation (MLP-large) &
+1.48 [1.03, 2.14] &
+1.64 [1.11, 2.37] &
+1.48 [0.89, 2.15] &
+0.18 [0.12, 0.24] \\
+DP-SGD ($\varepsilon=5$) (MLP-large) &
+1.26 [0.35, 2.49] &
+0.98 [0.73, 1.28] &
+1.26 [0.39, 2.39] &
+0.06 [0.04, 0.07] \\
+DP-SGD ($\varepsilon=5$) + output\_perturbation (MLP-large) &
+1.00 [0.70, 1.36] &
+1.51 [0.79, 2.35] &
+1.00 [0.69, 1.29] &
+0.14 [0.09, 0.21] \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\\
+\begin{flushleft}
+\justifying
+\footnotesize
+All values are computed from Table~8 (gender rows) in the All Tables Report and converted to percentage points (pp) for readability. We omit label-only output coarsening rows from this table because the coarsened outputs can collapse to constant decisions in this setting, which makes the associated group-gap entries uninformative; those release-sensitivity cases are reported and interpreted in the RQ1 release-sensitivity table.
+\end{flushleft}
+\end{threeparttable}
+\end{table}
+
+% RQ2-B: Pair overall misclassification with group gaps (OULAD, aligned rows)
+\begin{table}[t]
+\centering
+\caption{Overall misclassification versus group-level misclassification gaps on OULAD (gender). Gaps are in percentage points (pp).}
+\label{tab:rq2_overall_vs_group}
+\begin{threeparttable}
+\begin{adjustbox}{max width=\linewidth}
+\begin{tabular}{@{}l l l l@{}}
+\toprule
+Condition & Test AUC & Test F1 & $\Delta\mathrm{TPR}$ (pp) \\
+\midrule
+None (MLP-small) &
+0.589 [0.587, 0.590] &
+0.549 [0.538, 0.563] &
+0.64 [0.34, 0.87] \\
+DP-SGD ($\varepsilon=5$) (MLP-small) &
+0.589 [0.586, 0.592] &
+0.561 [0.541, 0.590] &
+0.53 [0.18, 0.92] \\
+None + output\_perturbation (MLP-small) &
+0.561 [0.559, 0.563] &
+0.571 [0.567, 0.576] &
+0.42 [0.23, 0.61] \\
+None + output\_perturbation (MLP-large) &
+0.556 [0.553, 0.561] &
+0.581 [0.576, 0.586] &
+1.48 [1.03, 2.14] \\
+DP-SGD ($\varepsilon=5$) + output\_perturbation (MLP-large) &
+0.553 [0.550, 0.557] &
+0.572 [0.567, 0.576] &
+1.00 [0.70, 1.36] \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\\
+\begin{flushleft}
+\justifying 
+\footnotesize
+\item Test AUC and Test F1 are taken from Table~6, and $\Delta\mathrm{TPR}$ is taken from Table~8 (gender rows), all in the All Tables Report.
+\end{flushleft}
+\end{threeparttable}
+\end{table}
+
+\subsection{RQ3: Do Privacy Design Choices Change Group-Level Misclassification Patterns?}
+
+RQ3 asks whether \emph{where} privacy is applied changes \emph{who} experiences more harmful mistakes under the same decision rule. We answer this question by holding the prediction setting fixed and varying only the privacy design choice. In this subsection we focus on OULAD with MLP-large, because OULAD is the setting where gender-group error gaps are defined and reported consistently, and MLP-large represents the higher-capacity neural model family used throughout the paper. We keep the task definition (Table~2), the decision threshold ($\tau{=}0.5$, Section~3.4), and the evaluation outputs (base versus released scores, Section~3.4) fixed, so that any differences below can be attributed to the privacy choice rather than to threshold tuning or output mismatches.
+
+Table~\ref{tab:rq3_design_contrasts} shows the central contrasts. When we release a continuous risk score, changing the privacy choice from training time (DP-SGD) to release time (output perturbation) changes both overall discrimination and the size of the gender gaps. Under DP-SGD at $\varepsilon{=}5$ (training-time protection with risk-score release), Test AUC is $0.587$ and the gender gaps are $\Delta\mathrm{TPR}=1.260$\,pp and $\Delta\mathrm{FPR}=0.984$\,pp. Under release-time perturbation without DP (perturbed score release), Test AUC drops to $0.556$ and the gaps increase to $\Delta\mathrm{TPR}=1.480$\,pp and $\Delta\mathrm{FPR}=1.640$\,pp. When we layer the two choices (DP-SGD at training time plus perturbation at release), Test AUC remains near the perturbation-only level ($0.553$), while the gap values shift again ($\Delta\mathrm{TPR}=1.000$\,pp; $\Delta\mathrm{FPR}=1.510$\,pp). These comparisons show that “privacy protection” is not a single knob. The point in the workflow where it is applied changes the released scores that drive decisions, and that change can alter which group accumulates more false alarms or missed-risk cases under the same threshold.
+
+Output coarsening changes the problem in a different way because it reduces the information available for decision-making. In Table~\ref{tab:rq3_design_contrasts}, label-only coarsening without DP produces Test AUC $0.539$ and small but nonzero gaps ($\Delta\mathrm{TPR}=0.291$\,pp; $\Delta\mathrm{FPR}=0.463$\,pp). When label-only coarsening is combined with DP-SGD, the released output becomes constant for this setting under the fixed threshold, yielding Test AUC $0.500$ and zero gaps. In this case the zero-gap result reflects the released output’s loss of differentiation, not a stronger guarantee that decisions are equitable. For RQ3, the key point is that the same model family can produce different group-level misclassification patterns depending on what is released.
+
+Table~\ref{tab:rq3_mechanism_evidence} provides the supporting context for interpreting these contrasts. Across the same conditions, the overfit-gap, calibration-shift, and score-compression summaries remain close in magnitude. This evidence helps narrow the interpretation: the differences in Table~\ref{tab:rq3_design_contrasts} are not accompanied by large global changes in fit or dispersion. Instead, the more direct driver is the released output that the decision rule consumes. RQ3 therefore contributes a distinct result relative to RQ1 and RQ2 by showing that privacy design choices can change group-level misclassification patterns even when the learning task, model family, and decision threshold are held constant.
+
+% RQ3-A: Privacy design choices and group-level patterns (OULAD, MLP-large)
+\begin{table}[t]
+\centering
+\caption{Design-choice contrasts on OULAD using MLP-large. Test AUC is reported to three decimals. Group gaps are reported in percentage points (pp), i.e., $100\times$ the values in Table~8.}
+\label{tab:rq3_design_contrasts}
+\begin{threeparttable}
+\begin{adjustbox}{max width=\linewidth}
+\begin{tabular}{@{}l l l l l@{}}
+\toprule
+Design choice & What is released & Test AUC & $\Delta\mathrm{TPR}$ (pp) & $\Delta\mathrm{FPR}$ (pp) \\
+\midrule
+Training-time only: DP-SGD ($\varepsilon{=}5$) &
+risk score &
+0.587 [0.584, 0.589] &
+1.260 [0.350, 2.490] &
+0.984 [0.730, 1.280] \\
+
+Release-time only: output\_perturbation (scale=0.1) &
+perturbed risk score &
+0.556 [0.553, 0.561] &
+1.480 [1.030, 2.140] &
+1.640 [1.110, 2.370] \\
+
+Layered: DP-SGD ($\varepsilon{=}5$) + output\_perturbation (scale=0.1) &
+perturbed risk score &
+0.553 [0.550, 0.557] &
+1.000 [0.700, 1.360] &
+1.510 [0.790, 2.350] \\
+
+Release-time only: output\_coarsening (label-only) &
+binary label &
+0.539 [0.515, 0.563] &
+0.291 [0.060, 0.617] &
+0.463 [0.139, 0.874] \\
+
+Layered: DP-SGD ($\varepsilon{=}5$) + output\_coarsening (label-only) &
+binary label &
+0.500 [0.500, 0.500] &
+0.000 [0.000, 0.000] &
+0.000 [0.000, 0.000] \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\\
+\begin{flushleft}
+\justifying
+\footnotesize
+Test AUC values are taken from Table~6, and $\Delta\mathrm{TPR}$/$\Delta\mathrm{FPR}$ values are taken from Table~8 (gender rows), in the provided All Tables Report. All gaps are converted to pp for readability. The coarsening rows document how changing the released output can change the decision behavior under the fixed threshold in Section~3.4.
+\end{flushleft}
+\end{threeparttable}
+\end{table}
+
+% RQ3-B: Mechanism evidence aligned to the same design choices (OULAD, MLP-large)
+\begin{table}[t]
+\centering
+\caption{Mechanism summaries aligned with the design choices in Table~\ref{tab:rq3_design_contrasts} (OULAD, MLP-large). Values are means with 95\% confidence intervals.}
+\label{tab:rq3_mechanism_evidence}
+\begin{threeparttable}
+\begin{adjustbox}{max width=\linewidth}
+\begin{tabular}{@{}l l l l@{}}
+\toprule
+Condition (OULAD, MLP-large) & Overfit gap & Calibration shift & Score compression \\
+\midrule
+DP-SGD ($\varepsilon{=}5$) &
+0.030 [0.028, 0.032] &
+0.019 [0.013, 0.027] &
+0.010 [0.008, 0.012] \\
+
+DP-SGD ($\varepsilon{=}5$) + output\_perturbation &
+0.030 [0.029, 0.031] &
+0.019 [0.015, 0.025] &
+0.010 [0.008, 0.011] \\
+
+none + output\_perturbation &
+0.030 [0.029, 0.031] &
+0.019 [0.015, 0.024] &
+0.010 [0.008, 0.011] \\
+
+none + output\_coarsening (label-only) &
+0.030 [0.029, 0.031] &
+0.019 [0.014, 0.024] &
+0.010 [0.008, 0.011] \\
+
+DP-SGD ($\varepsilon{=}5$) + output\_coarsening (label-only) &
+0.030 [0.028, 0.032] &
+0.019 [0.013, 0.027] &
+0.010 [0.008, 0.012] \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\\
+\begin{flushleft}
+\justifying
+\footnotesize
+\item All entries are taken from Table~11 in the provided All Tables Report (OULAD rows). These summaries describe broad differences in fit, calibration, and score dispersion across conditions. They provide context for interpreting Table~\ref{tab:rq3_design_contrasts} and are not used as the primary outcome for RQ3.
+\end{flushleft}
+\end{threeparttable}
+\end{table}
+
+
+
+
+\section{Discussion}
+
+This study examines privacy protection at two points: during training and at release. We test how it affects privacy risk and prediction errors across student groups. Across all datasets and model types, training with differential privacy consistently reduced membership inference attack success to near-random levels. In other words, an attacker could not reliably tell whether a specific student record was used in training. At the same time, when demographic information was available, differential privacy during training did not systematically increase the largest difference in error rates between demographic groups. Put differently, adding privacy noise during learning alone did not consistently lead to some groups having more false alarms or more missed-risk cases. A different pattern emerges when protections are layered across stages. When training time differential privacy is paired with release time output controls, such as rounding risk scores or releasing only coarse labels, the largest between group error rate gaps increase in several settings even when overall accuracy remains high. This contrast suggests that the release interface can reshape how errors are distributed across groups, even when training time privacy guarantees and global performance summaries remain favorable.
+
+
+A plausible explanation is that training time and release time protections affect different parts of the decision process, especially under fixed action rules such as flagging a student when the reported risk exceeds a threshold. Training time differential privacy reduces the influence of any single record on the fitted model. This can reduce overfitting without systematically changing which groups sit near the decision boundary. Release time controls, in contrast, change the representation of the score that the decision rule consumes. When an action is triggered by a threshold, coarsening scores can move some students from just below to just above the cutoff, or the reverse, even if the underlying model is unchanged. Because groups can differ in base rates and in how predicted scores are distributed around the threshold, the same coarsening rule can induce larger changes in false alarms or missed risk cases for some groups than for others. Our additional analyses support this interpretation. The observed gap increases are not primarily explained by large shifts in calibration or by broad changes in the overall score distribution. Instead, they are consistent with a mechanism in which disparities arise from how predictions are converted into actions at release time, not only from changes in overall model accuracy.
+
+These results have implications for both research practice and deployment. For research, privacy protection should be treated as a pipeline level design choice whose effects are mediated by the released interface and the decision rule applied to it. Evaluations that report only privacy leakage or only average predictive utility can miss changes in who is flagged for support under realistic operating conditions. For deployment, the implication is direct. Privacy choices can change who receives help. Training time differential privacy reduces membership inference risk and does not consistently increase between group decision error gaps in our experiments. However, additional release time restrictions can produce larger group gaps while the system still appears accurate and private under global metrics. Institutions should therefore evaluate privacy, predictive usefulness, and group wise false alarm and missed risk rates together, using the operational threshold and the exact released score format that will be used in practice.
+
+\section{Limitations}
+This study has several limitations. First, group-level error analysis is necessarily restricted to datasets that include demographic attributes, which in our experiments applies primarily to OULAD; as a result, fairness outcomes cannot be directly assessed for datasets where such information is unavailable, and the reported fairness patterns should not be assumed to generalize to all educational contexts. Second, the prediction tasks examined in this study focus on binary outcomes evaluated under fixed decision thresholds, whereas educational predictions in practice may be used in more complex ways, such as prioritizing ranked lists of students or allocating limited support resources. This could lead to different patterns of error distribution under privacy protection. Third, our evaluation considers commonly used membership inference attacks to assess privacy risk, and while these attacks provide a standard and interpretable benchmark, they do not capture all possible adversarial strategies that could arise in real educational settings. 
+
+\section{Conclusion}
+
+Across three educational datasets and standard prediction models, this study provides quantitative evidence on how privacy protection choices affect educational predictions. When differential privacy is applied during training, membership inference performance drops to near random levels, with attack AUC at or below 0.51, while predictive accuracy remains strong. In settings with demographic attributes, training time differential privacy does not consistently increase between group error gaps under the fixed decision rule used in this study. By contrast, when privacy protection is additionally applied at release time through coarsened outputs, between group error differences increase in several cases even though overall accuracy remains high. Overall, these results suggest that training time privacy protection does not inherently shift errors toward particular groups, but that restricting what is released can change who is missed or wrongly flagged by altering how scores interact with operational decision rules. This evidence supports privacy aware deployment practices that evaluate privacy risk, predictive usefulness, and group wise decision errors jointly under the intended release interface and decision policy.
+
+
+
+%
+% The following two commands are all you need in the
+% initial runs of your .tex file to
+% produce the bibliography for the citations in your paper.
+\bibliographystyle{abbrv}
+\bibliography{sigproc}  % sigproc.bib is the name of the Bibliography in this case
+% You must have a proper ".bib" file
+%  and remember to run:
+% latex bibtex latex latex
+% to resolve all references
+\end{document}
